@@ -17,7 +17,8 @@ pub fn main(init: std.process.Init) !void {
         const write_buffer: []u8 = try allocator.alloc(u8, 1000);
 
         var writer = std.Io.File.writer(stdout, io, write_buffer);
-        try writer.interface.print("$: ", .{});
+        const pwd = try prompt(allocator, io);
+        try writer.interface.print("{s}> ", .{pwd});
         try writer.interface.flush();
 
         var reader = std.Io.File.reader(stdin, io, read_buffer);
@@ -42,4 +43,11 @@ pub fn handler(allocator: std.mem.Allocator, cmd: []const u8) ![]const u8 {
     switch (cmd_enum) {
         .exit => std.process.exit(0),
     }
+    return cmd;
+}
+
+pub fn prompt(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
+    const pwd: []u8 = try allocator.alloc(u8, 1000);
+    const n = try std.process.currentPath(io, pwd);
+    return pwd[0..n];
 }
