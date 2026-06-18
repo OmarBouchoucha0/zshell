@@ -17,8 +17,8 @@ pub fn main(init: std.process.Init) !void {
         const write_buffer: []u8 = try allocator.alloc(u8, 1000);
 
         var writer = std.Io.File.writer(stdout, io, write_buffer);
-        const pwd = try prompt(allocator, io);
-        try writer.interface.print("{s}> ", .{pwd});
+        const current_directory = try prompt(allocator, io);
+        try writer.interface.print("{s}> ", .{current_directory});
         try writer.interface.flush();
 
         var reader = std.Io.File.reader(stdin, io, read_buffer);
@@ -33,9 +33,9 @@ pub fn main(init: std.process.Init) !void {
 }
 
 pub fn prompt(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
-    const pwd: []u8 = try allocator.alloc(u8, 1000);
-    const n = try std.process.currentPath(io, pwd);
-    return pwd[0..n];
+    const current_directory: []u8 = try allocator.alloc(u8, 1000);
+    const n = try std.process.currentPath(io, current_directory);
+    return current_directory[0..n];
 }
 
 const Input = struct {
@@ -47,6 +47,8 @@ const BuiltinCmd = enum {
     exit,
     echo,
     type,
+    pwd,
+    cd,
 };
 
 pub fn handler(allocator: std.mem.Allocator, io: std.Io, input: []const u8) ![]const u8 {
@@ -55,13 +57,14 @@ pub fn handler(allocator: std.mem.Allocator, io: std.Io, input: []const u8) ![]c
     var cmd_output: []const u8 = undefined;
     const cmd_lower_case = std.ascii.lowerString(output, input_parsed.cmd);
     const cmd_enum = std.meta.stringToEnum(BuiltinCmd, cmd_lower_case) orelse {
-        const result = std.process.run(allocator, io, .{
+        const process_result = std.process.run(allocator, io, .{
             .argv = &.{ input_parsed.cmd, input_parsed.args },
         }) catch {
             const warning_msg: []const u8 = "Unknown command \n";
             return warning_msg;
         };
-        return result.stdout;
+        cmd_output = process_result.stdout;
+        return cmd_output;
     };
 
     switch (cmd_enum) {
@@ -72,7 +75,16 @@ pub fn handler(allocator: std.mem.Allocator, io: std.Io, input: []const u8) ![]c
         .type => {
             cmd_output = try ttype(allocator, input_parsed.args);
         },
+        .pwd => {
+            cmd_output = try pwd(allocator, io, input_parsed.args);
+        },
+        .cd => {
+            cmd_output = cd(allocator, input_parsed.args) orelse {
+                cmd_output = "";
+            }
+        },
     }
+    cmd_output = try std.fmt.allocPrint(allocator, "{s}\n", .{cmd_output});
     return cmd_output;
 }
 
@@ -90,6 +102,22 @@ pub fn parseInput(input: []const u8) Input {
     return parsed_input;
 }
 
+pub fn parseArgs(allocator: std.mem.Allocator, input: []const u8) std.array_list(u8) {
+    const whitespace = " \t\r\n";
+    var tokens = std.mem.tokenizeAny(u8, input, whitespace);
+    var args: std.ArrayList([]const u8) = .empty;
+
+    while (tokens.next()) |token| {
+        try args.append(allocator, token);
+    }
+    return args;
+}
+
+pub fn tooManyArgs(allocator: std.mem.Allocator, cmd: []const u8) ![]const u8 {
+    const buffer: []u8 = try allocator.alloc(u8, 100);
+    return std.fmt.bufPrint(buffer, "{s}: too many arguments", .{cmd});
+}
+
 pub fn exit() void {
     std.process.exit(0);
 }
@@ -101,7 +129,30 @@ pub fn echo(args: []const u8) []const u8 {
 pub fn ttype(allocator: std.mem.Allocator, args: []const u8) ![]const u8 {
     const buffer: []u8 = try allocator.alloc(u8, 100);
     _ = std.meta.stringToEnum(BuiltinCmd, args) orelse {
-        return std.fmt.bufPrint(buffer, "{s} is not found\n", .{args});
+        return std.fmt.bufPrint(buffer, "{s} is not found", .{args});
     };
-    return std.fmt.bufPrint(buffer, "{s} is a shell builtin\n", .{args});
+    return std.fmt.bufPrint(buffer, "{s} is a shell builtin", .{args});
+}
+
+pub fn pwd(allocator: std.mem.Allocator, io: std.Io, args: []const u8) ![]const u8 {
+    if (args.len > 0) {
+        const cmd: []const u8 = "pwd";
+        return try tooManyArgs(allocator, cmd);
+    }
+    const current_directory: []u8 = try allocator.alloc(u8, 1000);
+    const n = try std.process.currentPath(io, current_directory);
+
+    return current_directory[0..n];
+}
+
+pub fn cd(allocator: std.mem.Allocator, args: []const u8) ?[]const u8 {
+    const parsed_args: std.ArrayList([]const u8) = parseArgs(allocator, args);
+    if (parsed_args.items.len > 1) {
+        const cmd: []const u8 = "cd";
+        tooManyArgs(allocator, cmd);
+    }
+    std.posix.chdir(parsed_args[0]) catch {
+        const buffer: []u8 = try allocator.alloc(u8, 100);
+        return std.fmt.bufPrint(buffer, "Path not found: {s}", .{args});
+    };
 }
